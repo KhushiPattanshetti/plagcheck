@@ -1,0 +1,25 @@
+<section class="stats-section">
+    <h2>Model Statistics</h2>
+    <div class="stats-grid">
+        <div class="stat-card">
+            <h3>N-gram Order</h3>
+            <p class="stat-value">{{ heatmap_data.stats.n_value }}</p>
+        </div>
+        <div class="stat-card">
+            <h3>Vocabulary Size</h3>
+            <p class="stat-value">{{ heatmap_data.stats.vocab_size }}</p>
+        </div>
+        <div class="stat-card">
+            <h3>N-grams Count</h3>
+            <p class="stat-value">{{ heatmap_data.stats.ngram_count }}</p>
+        </div>
+        <div class="stat-card">
+            <h3>Test Data Length</h3>
+            <p class="stat-value">{{ heatmap_data.stats.test_length }}</p>
+        </div>
+        <div class="stat-card">
+            <h3>Perplexity</h3>
+            <p class="stat-value">{{ heatmap_data.stats.perplexity }}</p>
+        </div>
+    </div>
+</section>

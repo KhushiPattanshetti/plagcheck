@@ -1,0 +1,12 @@
+.heatmap-container {
+  background-color: var(--card-color);
+  padding: 1rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  overflow-x: auto;
+}
+
+.js-plotly-plot {
+  width: 100%;
+  margin: 0 auto;
+}

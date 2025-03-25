@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <section class="upload-section" id="upload-section">
+        <h2>Upload Training Data</h2>
+        <form id="upload-form" enctype="multipart/form-data">
+            <div class="form-group">
+                <label for="train-file">Training Data (train.txt):</label>
+                <input type="file" id="train-file" name="train_file" accept=".txt" required>
+            </div>
+            <div class="form-group">
+                <label for="test-file">Test Data (test.txt):</label>
+                <input type="file" id="test-file" name="test_file" accept=".txt" required>
+            </div>
+            <button type="submit" class="btn-upload">Process Files</button>
+        </form>
+        <div id="upload-status" class="status-message"></div>
+    </section>
+
+    <div id="content-section" style="display: {% if files_uploaded %}block{% else %}none{% endif %};">
+        {% if files_uploaded %}
+            {% include "components/stats.html" %}
+            {% include "components/lookup.html" %}
+            
+            <section class="visualization-section">
+                <h2>Heatmap Visualization</h2>
+                <div id="heatmap" class="heatmap-container"></div>
+            </section>
+        {% endif %}
+    </div>
+{% endblock %}
+
+{% block scripts %}
+    <script src="{{ url_for('static', filename='js/upload.js') }}"></script>
+    
+    {% if files_uploaded %}
+        <script src="{{ url_for('static', filename='js/heatmap.js') }}"></script>
+        <script src="{{ url_for('static', filename='js/lookup.js') }}"></script>
+        
+        <script>
+            const heatmapData = {
+                scores: {{ heatmap_data.scores|tojson }},
+                labels: {{ heatmap_data.labels|tojson }},
+                individualLabels: {{ heatmap_data.individual_labels|tojson }},
+                stats: {{ heatmap_data.stats|tojson }}
+            };
+            
+            document.addEventListener('DOMContentLoaded', () => {
+                initHeatmap(heatmapData);
+            });
+        </script>
+    {% endif %}
+{% endblock %}
