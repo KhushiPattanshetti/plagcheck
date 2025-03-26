@@ -8,12 +8,16 @@ import numpy as np
 from scipy.ndimage import gaussian_filter
 import os
 from werkzeug.utils import secure_filename
+import threading
+import time
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 app.config['STATIC_FOLDER'] = 'static'
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['ALLOWED_EXTENSIONS'] = {'txt'}
-app.config['FILES_UPLOADED'] = False  # Track if files have been uploaded
+app.config['FILES_UPLOADED'] = False
+app.config['FILE_DELETION_DELAY'] = 300  # 5 minutes in seconds
 
 # Initialize NLTK
 nltk.download('punkt', quiet=True)
@@ -30,6 +34,7 @@ model = None
 training_data = []
 testing_data = []
 unique_vocab = set()
+uploaded_files = {}  # Track uploaded files and their deletion times
 
 # Regex patterns
 CLEAN_TEXT_PATTERN = re.compile(r"[^\w\s]")
@@ -118,6 +123,37 @@ def initialize_model(train_path=None, test_path=None):
         ))
     else:
         testing_data = [MODEL_CONFIG['pad_symbol'] * MODEL_CONFIG['n']]
+
+def schedule_file_deletion(filepath):
+    """Schedule a file for deletion after the configured delay."""
+    deletion_time = datetime.now() + timedelta(seconds=app.config['FILE_DELETION_DELAY'])
+    uploaded_files[filepath] = deletion_time
+    print(f"Scheduled deletion for {filepath} at {deletion_time}")
+
+def cleanup_files():
+    """Periodically check and delete expired files."""
+    while True:
+        now = datetime.now()
+        to_delete = []
+        
+        for filepath, deletion_time in uploaded_files.items():
+            if now >= deletion_time and os.path.exists(filepath):
+                to_delete.append(filepath)
+        
+        for filepath in to_delete:
+            try:
+                os.remove(filepath)
+                del uploaded_files[filepath]
+                print(f"Deleted file: {filepath}")
+            except Exception as e:
+                print(f"Error deleting file {filepath}: {e}")
+        
+        time.sleep(60)  # Check every minute
+
+# Start the cleanup thread when the app starts
+cleanup_thread = threading.Thread(target=cleanup_files)
+cleanup_thread.daemon = True
+cleanup_thread.start()
 
 @app.route('/')
 def index():
@@ -231,6 +267,10 @@ def upload_files():
             
             train_file.save(train_path)
             test_file.save(test_path)
+            
+            # Schedule files for deletion
+            schedule_file_deletion(train_path)
+            schedule_file_deletion(test_path)
             
             # Reinitialize model with new files
             initialize_model(train_path, test_path)
