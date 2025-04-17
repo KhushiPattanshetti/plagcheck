@@ -11,16 +11,23 @@ from werkzeug.utils import secure_filename
 import threading
 import time
 from datetime import datetime, timedelta
+import easyocr
+import PyPDF2
+from docx import Document
+import io
 
 app = Flask(__name__)
 app.config['STATIC_FOLDER'] = 'static'
 app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['ALLOWED_EXTENSIONS'] = {'txt'}
+app.config['ALLOWED_EXTENSIONS'] = {'txt', 'pdf', 'docx', 'png', 'jpg', 'jpeg'}
 app.config['FILES_UPLOADED'] = False
 app.config['FILE_DELETION_DELAY'] = 300  # 5 minutes in seconds
 
 # Initialize NLTK
 nltk.download('punkt', quiet=True)
+
+# Initialize EasyOCR reader (run once at startup)
+reader = easyocr.Reader(['en'])
 
 # Model configuration
 MODEL_CONFIG = {
@@ -44,6 +51,27 @@ def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
 
+def extract_text_from_file(file_path, file_type):
+    """Extract text from different file formats."""
+    try:
+        if file_type == 'pdf':
+            with open(file_path, 'rb') as f:
+                pdf_reader = PyPDF2.PdfReader(f)
+                text = ' '.join([page.extract_text() for page in pdf_reader.pages])
+                return text
+        elif file_type == 'docx':
+            doc = Document(file_path)
+            return ' '.join([para.text for para in doc.paragraphs])
+        elif file_type in ['png', 'jpg', 'jpeg']:
+            result = reader.readtext(file_path, detail=0)
+            return ' '.join(result)
+        else:  # txt file
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+    except Exception as e:
+        print(f"Error extracting text from {file_path}: {e}")
+        return ""
+
 def preprocess_text(text):
     """Lowercases, removes special characters, and tokenizes."""
     if not text:
@@ -52,12 +80,11 @@ def preprocess_text(text):
     text = CLEAN_TEXT_PATTERN.sub("", text).lower()
     return word_tokenize(text)
 
-def load_text(file_path):
+def load_text(file_path, file_type='txt'):
     """Loads and preprocesses text from a file."""
     try:
-        with open(file_path, encoding="utf-8") as f:
-            content = f.read()
-            return preprocess_text(content)
+        text = extract_text_from_file(file_path, file_type)
+        return preprocess_text(text)
     except FileNotFoundError:
         print(f"Warning: {file_path} not found. Using default token.")
         return [MODEL_CONFIG['oov_token']]
@@ -65,7 +92,7 @@ def load_text(file_path):
         print(f"Error reading {file_path}: {e}")
         return [MODEL_CONFIG['oov_token']]
 
-def initialize_model(train_path=None, test_path=None):
+def initialize_model(train_path=None, test_path=None, train_type='txt', test_type='txt'):
     """Initialize the n-gram model with training data."""
     global model, training_data, testing_data, unique_vocab
     
@@ -80,7 +107,7 @@ def initialize_model(train_path=None, test_path=None):
         test_path = "test.txt"
     
     # Load and preprocess training data
-    training_data = load_text(train_path)
+    training_data = load_text(train_path, train_type)
     
     # Handle OOV
     unique_vocab = set(training_data)
@@ -107,7 +134,7 @@ def initialize_model(train_path=None, test_path=None):
         model.fit([ngrams_list], vocabulary_text=training_data)
     
     # Load and preprocess testing data
-    testing_data = load_text(test_path)
+    testing_data = load_text(test_path, test_type)
     testing_data = [
         word if word in unique_vocab else MODEL_CONFIG['oov_token'] 
         for word in testing_data
@@ -159,8 +186,18 @@ cleanup_thread.start()
 def index():
     """Render the main page with conditional content."""
     # Check if files exist in upload folder
-    train_exists = os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'train.txt'))
-    test_exists = os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'test.txt'))
+    train_exists = os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'train.txt')) or \
+                  os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'train.pdf')) or \
+                  os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'train.docx')) or \
+                  os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'train.jpg')) or \
+                  os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'train.png'))
+    
+    test_exists = os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'test.txt')) or \
+                 os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'test.pdf')) or \
+                 os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'test.docx')) or \
+                 os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'test.jpg')) or \
+                 os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'test.png'))
+    
     files_uploaded = train_exists and test_exists
     
     if not files_uploaded:
@@ -168,7 +205,21 @@ def index():
     
     # Only initialize model and process data if files exist
     if not model:
-        initialize_model()
+        # Determine file types
+        train_type = 'txt'
+        test_type = 'txt'
+        for ext in ['pdf', 'docx', 'jpg', 'png']:
+            if os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], f'train.{ext}')):
+                train_type = ext
+            if os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], f'test.{ext}')):
+                test_type = ext
+        
+        initialize_model(
+            os.path.join(app.config['UPLOAD_FOLDER'], f'train.{train_type}'),
+            os.path.join(app.config['UPLOAD_FOLDER'], f'test.{test_type}'),
+            train_type,
+            test_type
+        )
     
     # Compute scores for test data - handle empty case
     scores = []
@@ -259,9 +310,13 @@ def upload_files():
             # Create upload directory if it doesn't exist
             os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
             
-            # Save files
-            train_filename = secure_filename('train.txt')
-            test_filename = secure_filename('test.txt')
+            # Get file extensions
+            train_ext = train_file.filename.rsplit('.', 1)[1].lower()
+            test_ext = test_file.filename.rsplit('.', 1)[1].lower()
+            
+            # Save files with appropriate extensions
+            train_filename = secure_filename(f'train.{train_ext}')
+            test_filename = secure_filename(f'test.{test_ext}')
             train_path = os.path.join(app.config['UPLOAD_FOLDER'], train_filename)
             test_path = os.path.join(app.config['UPLOAD_FOLDER'], test_filename)
             
@@ -273,7 +328,7 @@ def upload_files():
             schedule_file_deletion(test_path)
             
             # Reinitialize model with new files
-            initialize_model(train_path, test_path)
+            initialize_model(train_path, test_path, train_ext, test_ext)
             app.config['FILES_UPLOADED'] = True
             
             return jsonify({'success': True})
@@ -333,11 +388,35 @@ if __name__ == '__main__':
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
     
     # Check if files already exist in upload folder
-    train_exists = os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'train.txt'))
-    test_exists = os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'test.txt'))
+    train_exists = os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'train.txt')) or \
+                  os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'train.pdf')) or \
+                  os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'train.docx')) or \
+                  os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'train.jpg')) or \
+                  os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'train.png'))
+    
+    test_exists = os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'test.txt')) or \
+                 os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'test.pdf')) or \
+                 os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'test.docx')) or \
+                 os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'test.jpg')) or \
+                 os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], 'test.png'))
+    
     app.config['FILES_UPLOADED'] = train_exists and test_exists
     
     if app.config['FILES_UPLOADED']:
-        initialize_model()
+        # Determine file types
+        train_type = 'txt'
+        test_type = 'txt'
+        for ext in ['pdf', 'docx', 'jpg', 'png']:
+            if os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], f'train.{ext}')):
+                train_type = ext
+            if os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], f'test.{ext}')):
+                test_type = ext
+        
+        initialize_model(
+            os.path.join(app.config['UPLOAD_FOLDER'], f'train.{train_type}'),
+            os.path.join(app.config['UPLOAD_FOLDER'], f'test.{test_type}'),
+            train_type,
+            test_type
+        )
     
     app.run(debug=True)
